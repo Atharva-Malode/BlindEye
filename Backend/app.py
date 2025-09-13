@@ -18,7 +18,7 @@ app.add_middleware(
 )
 
 camera = None
-model = YOLO("yolov8n.pt")  # COCO pre-trained tiny model for speed
+model = YOLO("yolov8n.pt")  
 
 detection_memory = {}  # {label: (last_seen_time, direction)}
 
