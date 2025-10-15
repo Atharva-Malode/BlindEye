@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 
 export default function CamPage() {
@@ -6,29 +6,42 @@ export default function CamPage() {
   const [socket, setSocket] = useState(null);
   const [model, setModel] = useState("generic");
   const imgRef = useRef();
-  const lastSpeechRef = useRef(0);    // Last start time
-  const isSpeakingRef = useRef(false); // Lock flag (is audio playing?)
-  const timeoutRef = useRef(null);     // Timeout handle
+  const lastSpeechRef = useRef(0);
+  const isSpeakingRef = useRef(false);
+  const timeoutRef = useRef(null);
   const navigate = useNavigate();
 
+  // 🧠 Keyboard Shortcut Logic
+  useEffect(() => {
+    const handleKeyPress = (e) => {
+      if (e.key.toLowerCase() === "c") {
+        setModel("currency");
+        console.log("💰 Switched to Currency Detection Mode");
+      } else if (e.key.toLowerCase() === "g") {
+        setModel("generic");
+        console.log("🎯 Switched to Generic Object Detection Mode");
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyPress);
+    return () => window.removeEventListener("keydown", handleKeyPress);
+  }, []);
+
   const speak = (text) => {
-    if (isSpeakingRef.current) return; // Skip if already speaking/in timeout
+    if (isSpeakingRef.current) return;
 
     const now = Date.now();
-    if (now - lastSpeechRef.current < 10000) return; // Skip if less than 3s
+    if (now - lastSpeechRef.current < 10000) return;
 
     isSpeakingRef.current = true;
     lastSpeechRef.current = now;
     console.log("🔊 Speaking:", text);
 
-    // Cancel any previous speech and timeout
     speechSynthesis.cancel();
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
 
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.onend = () => {
-      // After utterance ends, wait out the remaining 3s if needed,
-      // then release the lock for new speech
       const elapsed = Date.now() - lastSpeechRef.current;
       const remaining = Math.max(0, 3000 - elapsed);
       timeoutRef.current = setTimeout(() => {
@@ -43,7 +56,6 @@ export default function CamPage() {
   const startFeed = () => {
     if (running) return;
 
-    // Include model type in WebSocket URL
     const ws = new WebSocket(`ws://localhost:8000/ws/cam?model=${model}`);
 
     ws.onopen = () => {
@@ -96,6 +108,8 @@ export default function CamPage() {
     <div className="flex flex-col items-center justify-center h-screen bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
       <div className="bg-white text-gray-800 rounded-2xl shadow-2xl p-8 flex flex-col items-center space-y-6">
         <h1 className="text-2xl font-bold">Camera Feed with AI Guidance</h1>
+        <p className="text-sm text-gray-500">Press <strong>C</strong> for Currency or <strong>G</strong> for Generic mode</p>
+
         <img
           ref={imgRef}
           alt="Webcam Feed"
