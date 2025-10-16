@@ -30,11 +30,7 @@ export default function CamPage() {
   const speak = (text) => {
     if (isSpeakingRef.current) return;
 
-    const now = Date.now();
-    if (now - lastSpeechRef.current < 10000) return;
-
     isSpeakingRef.current = true;
-    lastSpeechRef.current = now;
     console.log("🔊 Speaking:", text);
 
     speechSynthesis.cancel();
@@ -42,12 +38,7 @@ export default function CamPage() {
 
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.onend = () => {
-      const elapsed = Date.now() - lastSpeechRef.current;
-      const remaining = Math.max(0, 3000 - elapsed);
-      timeoutRef.current = setTimeout(() => {
-        isSpeakingRef.current = false;
-        timeoutRef.current = null;
-      }, remaining);
+      isSpeakingRef.current = false;
     };
 
     speechSynthesis.speak(utterance);
