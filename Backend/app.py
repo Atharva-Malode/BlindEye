@@ -9,6 +9,9 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from ultralytics import YOLO
 from deepface import DeepFace
+import RPi.GPIO as GPIO
+from threading import Lock
+from fastapi.websockets import WebSocketState  # For checking connection state
 
 app = FastAPI()
 
@@ -30,6 +33,12 @@ face_recognition_memory = {}  # {name: last_seen_time} - prevents duplicate anno
 # Path to your face database
 FACE_DB_PATH = "known_faces"
 
+# GPIO Setup for Push Button
+BUTTON_PIN = 18  # Change to your GPIO pin
+active_connections = []  # List of active WebSocket connections
+connection_lock = Lock()  # Thread-safe access to connections
+current_global_mode = "generic"  # Track global mode for button toggling
+
 # Pre-build DeepFace representations on startup (speeds up recognition)
 @app.on_event("startup")
 async def startup_event():
@@ -47,6 +56,33 @@ async def startup_event():
             print("✅ Face database ready")
         except Exception as e:
             print(f"⚠️ Could not pre-build face database: {e}")
+    
+    # Initialize GPIO
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)  # Pull-up for button
+    GPIO.add_event_detect(BUTTON_PIN, GPIO.FALLING, callback=button_callback, bouncetime=300)  # Debounce 300ms
+    print(f"🔘 Button initialized on GPIO {BUTTON_PIN}")
+
+def button_callback(channel):
+    """Callback for button press - toggle mode and notify clients"""
+    global current_global_mode
+    print(f"🔘 Button pressed on pin {channel}")
+    
+    # Toggle mode
+    current_global_mode = "currency" if current_global_mode == "generic" else "generic"
+    new_model = current_global_mode
+    
+    # Broadcast to all active connections
+    with connection_lock:
+        for conn in active_connections[:]:  # Copy list to avoid modification during iteration
+            if conn.client_state == WebSocketState.CONNECTED:
+                try:
+                    asyncio.create_task(conn.send_json({"type": "mode_switch", "model": new_model}))
+                except Exception as e:
+                    print(f"⚠️ Failed to send to client: {e}")
+                    active_connections.remove(conn)
+            else:
+                active_connections.remove(conn)
 
 def recognize_face(face_img):
     """
@@ -95,6 +131,11 @@ def recognize_face(face_img):
 async def webcam_feed(websocket: WebSocket):
     global camera, detection_memory, face_recognition_memory
     await websocket.accept()
+    
+    # Add to active connections
+    with connection_lock:
+        active_connections.append(websocket)
+    
     try:
         camera = cv2.VideoCapture(0)
         query_params = dict(pair.split('=') for pair in websocket.url.query.split('&')) if websocket.url.query else {}
@@ -209,9 +250,12 @@ async def webcam_feed(websocket: WebSocket):
 
     except WebSocketDisconnect:
         print("🔌 Client disconnected cleanly")
-    except Exception as e:
-        print("⚠️ Error:", e)
     finally:
+        # Remove from active connections
+        with connection_lock:
+            if websocket in active_connections:
+                active_connections.remove(websocket)
+        
         if camera and camera.isOpened():
             camera.release()
             camera = None
@@ -219,3 +263,9 @@ async def webcam_feed(websocket: WebSocket):
         if not websocket.client_state.name == "DISCONNECTED":
             await websocket.close()
         print("✅ Camera released, socket closed")
+
+# Add cleanup on shutdown
+@app.on_event("shutdown")
+async def shutdown_event():
+    GPIO.cleanup()
+    print("🧹 GPIO cleaned up")
