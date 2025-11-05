@@ -9,8 +9,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from ultralytics import YOLO
 from deepface import DeepFace
-import RPi.GPIO as GPIO
-from threading import Lock
+import keyboard  # For keyboard hotkey detection
+from threading import Lock  # For thread-safe WebSocket management
 from fastapi.websockets import WebSocketState  # For checking connection state
 
 app = FastAPI()
@@ -33,15 +33,16 @@ face_recognition_memory = {}  # {name: last_seen_time} - prevents duplicate anno
 # Path to your face database
 FACE_DB_PATH = "known_faces"
 
-# GPIO Setup for Push Button
-BUTTON_PIN = 18  # Change to your GPIO pin
+# Keyboard Hotkey Setup
 active_connections = []  # List of active WebSocket connections
 connection_lock = Lock()  # Thread-safe access to connections
-current_global_mode = "generic"  # Track global mode for button toggling
+current_global_mode = "generic"  # Track global mode for hotkey toggling
+loop = None  # Store the event loop for thread-safe async calls
 
 # Pre-build DeepFace representations on startup (speeds up recognition)
 @app.on_event("startup")
 async def startup_event():
+    global loop
     if os.path.exists(FACE_DB_PATH):
         print("🔄 Building face database representations...")
         try:
@@ -57,32 +58,48 @@ async def startup_event():
         except Exception as e:
             print(f"⚠️ Could not pre-build face database: {e}")
     
-    # Initialize GPIO
-    GPIO.setmode(GPIO.BCM)
-    GPIO.setup(BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)  # Pull-up for button
-    GPIO.add_event_detect(BUTTON_PIN, GPIO.FALLING, callback=button_callback, bouncetime=300)  # Debounce 300ms
-    print(f"🔘 Button initialized on GPIO {BUTTON_PIN}")
+    # Capture the event loop for thread-safe broadcasts
+    loop = asyncio.get_running_loop()
+    
+    # Initialize keyboard hotkey
+    keyboard.add_hotkey('1', button_callback)
+    print("⌨️ Keyboard hotkey '1' initialized for mode toggle")
 
-def button_callback(channel):
-    """Callback for button press - toggle mode and notify clients"""
+async def broadcast_mode_switch(new_model):
+    """Async function to broadcast mode switch to all connected clients"""
+    msg = {"type": "mode_switch", "model": new_model}
+    with connection_lock:
+        conns = [c for c in active_connections if c.client_state == WebSocketState.CONNECTED]
+    
+    for conn in conns:
+        try:
+            await conn.send_json(msg)
+        except Exception as e:
+            print(f"⚠️ Failed to send to client: {e}")
+            # Clean up invalid connection
+            with connection_lock:
+                if conn in active_connections:
+                    active_connections.remove(conn)
+
+def button_callback():
+    """Callback for '1' key press - toggle mode and notify clients (thread-safe async)"""
     global current_global_mode
-    print(f"🔘 Button pressed on pin {channel}")
+    print("⌨️ '1' key pressed - toggling mode")
     
     # Toggle mode
     current_global_mode = "currency" if current_global_mode == "generic" else "generic"
     new_model = current_global_mode
     
-    # Broadcast to all active connections
-    with connection_lock:
-        for conn in active_connections[:]:  # Copy list to avoid modification during iteration
-            if conn.client_state == WebSocketState.CONNECTED:
-                try:
-                    asyncio.create_task(conn.send_json({"type": "mode_switch", "model": new_model}))
-                except Exception as e:
-                    print(f"⚠️ Failed to send to client: {e}")
-                    active_connections.remove(conn)
-            else:
-                active_connections.remove(conn)
+    # Thread-safe async broadcast
+    if loop:
+        future = asyncio.run_coroutine_threadsafe(broadcast_mode_switch(new_model), loop)
+        # Optionally wait for completion (non-blocking)
+        try:
+            future.result(timeout=1.0)
+        except asyncio.TimeoutError:
+            print("⚠️ Broadcast timed out, but queued")
+    else:
+        print("⚠️ No event loop available for broadcast")
 
 def recognize_face(face_img):
     """
@@ -267,5 +284,5 @@ async def webcam_feed(websocket: WebSocket):
 # Add cleanup on shutdown
 @app.on_event("shutdown")
 async def shutdown_event():
-    GPIO.cleanup()
-    print("🧹 GPIO cleaned up")
+    keyboard.unhook_all()
+    print("🧹 Keyboard hotkeys cleaned up")

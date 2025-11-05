@@ -11,21 +11,25 @@ export default function CamPage() {
   const timeoutRef = useRef(null);
   const navigate = useNavigate();
 
-  // 🧠 Keyboard Shortcut Logic (keep existing)
+  // 🧠 Keyboard Shortcut Logic
   useEffect(() => {
     const handleKeyPress = (e) => {
       if (e.key.toLowerCase() === "c") {
-        setModel("currency");
+        const newModel = "currency";
+        setModel(newModel);
+        if (running) reconnectWithModel(newModel);
         console.log("💰 Switched to Currency Detection Mode");
       } else if (e.key.toLowerCase() === "g") {
-        setModel("generic");
+        const newModel = "generic";
+        setModel(newModel);
+        if (running) reconnectWithModel(newModel);
         console.log("🎯 Switched to Generic Object Detection Mode");
       }
     };
 
     window.addEventListener("keydown", handleKeyPress);
     return () => window.removeEventListener("keydown", handleKeyPress);
-  }, []);
+  }, [running]);  // Depend on 'running' to access it in closure
 
   const speak = (text) => {
     if (isSpeakingRef.current) return;
@@ -121,7 +125,7 @@ export default function CamPage() {
       <div className="bg-white text-gray-800 rounded-2xl shadow-2xl p-8 flex flex-col items-center space-y-6">
         <h1 className="text-2xl font-bold">Camera Feed with AI Guidance</h1>
         <p className="text-sm text-gray-500">
-          Press <strong>C</strong> for Currency or <strong>G</strong> for Generic mode, or press the physical button to toggle
+          Press <strong>C</strong> for Currency or <strong>G</strong> for Generic mode, or press <strong>1</strong> (backend hotkey) to toggle
         </p>
 
         <img
